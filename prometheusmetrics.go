@@ -21,6 +21,7 @@ type Provider struct {
 
 	gauges        map[string]prometheus.Gauge
 	customMetrics map[string]*CustomCollector
+	constLabels   prometheus.Labels
 
 	histogramBuckets []float64
 	timerBuckets     []float64
@@ -64,6 +65,12 @@ func (p *Provider) WithTimerBuckets(b []float64) *Provider {
 	return p
 }
 
+// WithConstLabels adds additional labels to all metrics in this registry
+func (p *Provider) WithConstLabels(labels prometheus.Labels) *Provider {
+	p.constLabels = labels
+	return p
+}
+
 func (p *Provider) flattenKey(key string) string {
 	key = strings.Replace(key, " ", "_", -1)
 	key = strings.Replace(key, ".", "_", -1)
@@ -82,10 +89,11 @@ func (p *Provider) gaugeFromNameAndValue(name string, val float64) {
 	g, ok := p.gauges[key]
 	if !ok {
 		g = prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: p.flattenKey(p.namespace),
-			Subsystem: p.flattenKey(p.subsystem),
-			Name:      p.flattenKey(name),
-			Help:      name,
+			Namespace:   p.flattenKey(p.namespace),
+			Subsystem:   p.flattenKey(p.subsystem),
+			Name:        p.flattenKey(name),
+			Help:        name,
+			ConstLabels: p.constLabels,
 		})
 		p.promRegistry.Register(g)
 		p.gauges[key] = g
@@ -138,7 +146,7 @@ func (p *Provider) histogramFromNameAndMetric(name string, goMetric interface{},
 		),
 		p.flattenKey(name),
 		[]string{},
-		map[string]string{},
+		p.constLabels,
 	)
 
 	if constHistogram, err := prometheus.NewConstHistogram(
