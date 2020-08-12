@@ -71,6 +71,42 @@ func (p *Provider) WithConstLabels(labels prometheus.Labels) *Provider {
 	return p
 }
 
+func (p *Provider) UpdatePrometheusMetrics() {
+	for range time.Tick(p.flushInterval) {
+		p.UpdatePrometheusMetricsOnce()
+	}
+}
+
+func (p *Provider) UpdatePrometheusMetricsOnce() error {
+	p.r.Each(func(name string, i interface{}) {
+		switch metric := i.(type) {
+		case metrics.Counter:
+			p.gaugeFromNameAndValue(name, float64(metric.Count()))
+		case metrics.Gauge:
+			p.gaugeFromNameAndValue(name, float64(metric.Value()))
+		case metrics.GaugeFloat64:
+			p.gaugeFromNameAndValue(name, metric.Value())
+		case metrics.Histogram:
+			samples := metric.Snapshot().Sample().Values()
+			if len(samples) > 0 {
+				lastSample := samples[len(samples)-1]
+				p.gaugeFromNameAndValue(name, float64(lastSample))
+			}
+
+			p.histogramFromNameAndMetric(name, metric, p.histogramBuckets)
+		case metrics.Meter:
+			lastSample := metric.Snapshot().Rate1()
+			p.gaugeFromNameAndValue(name, lastSample)
+		case metrics.Timer:
+			lastSample := metric.Snapshot().Rate1()
+			p.gaugeFromNameAndValue(name, lastSample)
+
+			p.histogramFromNameAndMetric(name, metric, p.timerBuckets)
+		}
+	})
+	return nil
+}
+
 func (p *Provider) flattenKey(key string) string {
 	key = strings.Replace(key, " ", "_", -1)
 	key = strings.Replace(key, ".", "_", -1)
@@ -159,42 +195,6 @@ func (p *Provider) histogramFromNameAndMetric(name string, goMetric interface{},
 		collector.metric = constHistogram
 		p.mutex.Unlock()
 	}
-}
-
-func (p *Provider) UpdatePrometheusMetrics() {
-	for range time.Tick(p.flushInterval) {
-		p.UpdatePrometheusMetricsOnce()
-	}
-}
-
-func (p *Provider) UpdatePrometheusMetricsOnce() error {
-	p.r.Each(func(name string, i interface{}) {
-		switch metric := i.(type) {
-		case metrics.Counter:
-			p.gaugeFromNameAndValue(name, float64(metric.Count()))
-		case metrics.Gauge:
-			p.gaugeFromNameAndValue(name, float64(metric.Value()))
-		case metrics.GaugeFloat64:
-			p.gaugeFromNameAndValue(name, metric.Value())
-		case metrics.Histogram:
-			samples := metric.Snapshot().Sample().Values()
-			if len(samples) > 0 {
-				lastSample := samples[len(samples)-1]
-				p.gaugeFromNameAndValue(name, float64(lastSample))
-			}
-
-			p.histogramFromNameAndMetric(name, metric, p.histogramBuckets)
-		case metrics.Meter:
-			lastSample := metric.Snapshot().Rate1()
-			p.gaugeFromNameAndValue(name, lastSample)
-		case metrics.Timer:
-			lastSample := metric.Snapshot().Rate1()
-			p.gaugeFromNameAndValue(name, lastSample)
-
-			p.histogramFromNameAndMetric(name, metric, p.timerBuckets)
-		}
-	})
-	return nil
 }
 
 // for collecting prometheus.constHistogram objects
