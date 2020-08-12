@@ -26,7 +26,8 @@ type Provider struct {
 	histogramBuckets []float64
 	timerBuckets     []float64
 
-	mutex *sync.Mutex
+	ticker *time.Ticker
+	mutex  *sync.Mutex
 }
 
 // NewProvider returns a Provider that produces Prometheus metrics.
@@ -72,9 +73,17 @@ func (p *Provider) WithConstLabels(labels prometheus.Labels) *Provider {
 }
 
 func (p *Provider) UpdatePrometheusMetrics() {
-	for range time.Tick(p.flushInterval) {
+	p.ticker = time.NewTicker(p.flushInterval)
+	for range p.ticker.C {
 		p.UpdatePrometheusMetricsOnce()
 	}
+}
+
+func (p *Provider) Stop() {
+	if p.ticker == nil {
+		return
+	}
+	p.ticker.Stop()
 }
 
 func (p *Provider) UpdatePrometheusMetricsOnce() error {
