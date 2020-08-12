@@ -10,50 +10,61 @@ import (
 	"github.com/rcrowley/go-metrics"
 )
 
-// PrometheusConfig provides a container with config parameters for the
+// Provider provides a container with config parameters for the
 // Prometheus Exporter
+type Provider struct {
+	r             metrics.Registry
+	namespace     string
+	subsystem     string
+	promRegistry  prometheus.Registerer // Prometheus registry
+	flushInterval time.Duration         // interval to update prom metrics
 
-type PrometheusConfig struct {
-	namespace        string
-	Registry         metrics.Registry // Registry to be exported
-	subsystem        string
-	promRegistry     prometheus.Registerer //Prometheus registry
-	FlushInterval    time.Duration         //interval to update prom metrics
-	gauges           map[string]prometheus.Gauge
-	customMetrics    map[string]*CustomCollector
+	gauges        map[string]prometheus.Gauge
+	customMetrics map[string]*CustomCollector
+
 	histogramBuckets []float64
 	timerBuckets     []float64
-	mutex            *sync.Mutex
+
+	mutex *sync.Mutex
 }
 
-// NewPrometheusProvider returns a Provider that produces Prometheus metrics.
+// NewProvider returns a Provider that produces Prometheus metrics.
 // Namespace and subsystem are applied to all produced metrics.
-func NewPrometheusProvider(r metrics.Registry, namespace string, subsystem string, promRegistry prometheus.Registerer, FlushInterval time.Duration) *PrometheusConfig {
-	return &PrometheusConfig{
-		namespace:        namespace,
-		subsystem:        subsystem,
-		Registry:         r,
-		promRegistry:     promRegistry,
-		FlushInterval:    FlushInterval,
-		gauges:           make(map[string]prometheus.Gauge),
-		customMetrics:    make(map[string]*CustomCollector),
+func NewProvider(
+	r metrics.Registry,
+	namespace string,
+	subsystem string,
+	promRegistry prometheus.Registerer,
+	flushInterval time.Duration,
+) *Provider {
+	return &Provider{
+		r:             r,
+		namespace:     namespace,
+		subsystem:     subsystem,
+		promRegistry:  promRegistry,
+		flushInterval: flushInterval,
+
+		gauges:        make(map[string]prometheus.Gauge),
+		customMetrics: make(map[string]*CustomCollector),
+
 		histogramBuckets: []float64{0.05, 0.1, 0.25, 0.50, 0.75, 0.9, 0.95, 0.99},
 		timerBuckets:     []float64{0.50, 0.95, 0.99, 0.999},
-		mutex:            new(sync.Mutex),
+
+		mutex: new(sync.Mutex),
 	}
 }
 
-func (c *PrometheusConfig) WithHistogramBuckets(b []float64) *PrometheusConfig {
-	c.histogramBuckets = b
-	return c
+func (p *Provider) WithHistogramBuckets(b []float64) *Provider {
+	p.histogramBuckets = b
+	return p
 }
 
-func (c *PrometheusConfig) WithTimerBuckets(b []float64) *PrometheusConfig {
-	c.timerBuckets = b
-	return c
+func (p *Provider) WithTimerBuckets(b []float64) *Provider {
+	p.timerBuckets = b
+	return p
 }
 
-func (c *PrometheusConfig) flattenKey(key string) string {
+func (p *Provider) flattenKey(key string) string {
 	key = strings.Replace(key, " ", "_", -1)
 	key = strings.Replace(key, ".", "_", -1)
 	key = strings.Replace(key, "-", "_", -1)
@@ -62,34 +73,34 @@ func (c *PrometheusConfig) flattenKey(key string) string {
 	return key
 }
 
-func (c *PrometheusConfig) createKey(name string) string {
-	return fmt.Sprintf("%s_%s_%s", c.namespace, c.subsystem, name)
+func (p *Provider) createKey(name string) string {
+	return fmt.Sprintf("%s_%s_%s", p.namespace, p.subsystem, name)
 }
 
-func (c *PrometheusConfig) gaugeFromNameAndValue(name string, val float64) {
-	key := c.createKey(name)
-	g, ok := c.gauges[key]
+func (p *Provider) gaugeFromNameAndValue(name string, val float64) {
+	key := p.createKey(name)
+	g, ok := p.gauges[key]
 	if !ok {
 		g = prometheus.NewGauge(prometheus.GaugeOpts{
-			Namespace: c.flattenKey(c.namespace),
-			Subsystem: c.flattenKey(c.subsystem),
-			Name:      c.flattenKey(name),
+			Namespace: p.flattenKey(p.namespace),
+			Subsystem: p.flattenKey(p.subsystem),
+			Name:      p.flattenKey(name),
 			Help:      name,
 		})
-		c.promRegistry.Register(g)
-		c.gauges[key] = g
+		p.promRegistry.Register(g)
+		p.gauges[key] = g
 	}
 	g.Set(val)
 }
 
-func (c *PrometheusConfig) histogramFromNameAndMetric(name string, goMetric interface{}, buckets []float64) {
-	key := c.createKey(name)
+func (p *Provider) histogramFromNameAndMetric(name string, goMetric interface{}, buckets []float64) {
+	key := p.createKey(name)
 
-	collector, ok := c.customMetrics[key]
+	collector, ok := p.customMetrics[key]
 	if !ok {
-		collector = NewCustomCollector(c.mutex)
-		c.promRegistry.MustRegister(collector)
-		c.customMetrics[key] = collector
+		collector = NewCustomCollector(p.mutex)
+		p.promRegistry.MustRegister(collector)
+		p.customMetrics[key] = collector
 	}
 
 	var ps []float64
@@ -121,11 +132,11 @@ func (c *PrometheusConfig) histogramFromNameAndMetric(name string, goMetric inte
 
 	desc := prometheus.NewDesc(
 		prometheus.BuildFQName(
-			c.flattenKey(c.namespace),
-			c.flattenKey(c.subsystem),
-			fmt.Sprintf("%s_%s", c.flattenKey(name), typeName),
+			p.flattenKey(p.namespace),
+			p.flattenKey(p.subsystem),
+			fmt.Sprintf("%s_%s", p.flattenKey(name), typeName),
 		),
-		c.flattenKey(name),
+		p.flattenKey(name),
 		[]string{},
 		map[string]string{},
 	)
@@ -136,43 +147,43 @@ func (c *PrometheusConfig) histogramFromNameAndMetric(name string, goMetric inte
 		sum,
 		bucketVals,
 	); err == nil {
-		c.mutex.Lock()
+		p.mutex.Lock()
 		collector.metric = constHistogram
-		c.mutex.Unlock()
+		p.mutex.Unlock()
 	}
 }
 
-func (c *PrometheusConfig) UpdatePrometheusMetrics() {
-	for _ = range time.Tick(c.FlushInterval) {
-		c.UpdatePrometheusMetricsOnce()
+func (p *Provider) UpdatePrometheusMetrics() {
+	for range time.Tick(p.flushInterval) {
+		p.UpdatePrometheusMetricsOnce()
 	}
 }
 
-func (c *PrometheusConfig) UpdatePrometheusMetricsOnce() error {
-	c.Registry.Each(func(name string, i interface{}) {
+func (p *Provider) UpdatePrometheusMetricsOnce() error {
+	p.r.Each(func(name string, i interface{}) {
 		switch metric := i.(type) {
 		case metrics.Counter:
-			c.gaugeFromNameAndValue(name, float64(metric.Count()))
+			p.gaugeFromNameAndValue(name, float64(metric.Count()))
 		case metrics.Gauge:
-			c.gaugeFromNameAndValue(name, float64(metric.Value()))
+			p.gaugeFromNameAndValue(name, float64(metric.Value()))
 		case metrics.GaugeFloat64:
-			c.gaugeFromNameAndValue(name, float64(metric.Value()))
+			p.gaugeFromNameAndValue(name, metric.Value())
 		case metrics.Histogram:
 			samples := metric.Snapshot().Sample().Values()
 			if len(samples) > 0 {
 				lastSample := samples[len(samples)-1]
-				c.gaugeFromNameAndValue(name, float64(lastSample))
+				p.gaugeFromNameAndValue(name, float64(lastSample))
 			}
 
-			c.histogramFromNameAndMetric(name, metric, c.histogramBuckets)
+			p.histogramFromNameAndMetric(name, metric, p.histogramBuckets)
 		case metrics.Meter:
 			lastSample := metric.Snapshot().Rate1()
-			c.gaugeFromNameAndValue(name, float64(lastSample))
+			p.gaugeFromNameAndValue(name, lastSample)
 		case metrics.Timer:
 			lastSample := metric.Snapshot().Rate1()
-			c.gaugeFromNameAndValue(name, float64(lastSample))
+			p.gaugeFromNameAndValue(name, lastSample)
 
-			c.histogramFromNameAndMetric(name, metric, c.timerBuckets)
+			p.histogramFromNameAndMetric(name, metric, p.timerBuckets)
 		}
 	})
 	return nil
@@ -201,6 +212,6 @@ func (c *CustomCollector) Collect(ch chan<- prometheus.Metric) {
 	c.mutex.Unlock()
 }
 
-func (p *CustomCollector) Describe(ch chan<- *prometheus.Desc) {
+func (c *CustomCollector) Describe(ch chan<- *prometheus.Desc) {
 	// empty method to fulfill prometheus.Collector interface
 }
